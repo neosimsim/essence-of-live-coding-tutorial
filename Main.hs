@@ -8,6 +8,7 @@ import Control.Arrow
 import Control.Monad
 import Data.Functor
 import Data.Maybe
+import GHC.Float
 
 -- vector-space
 import Data.VectorSpace
@@ -22,20 +23,16 @@ import Debug.Trace
 import Data.Function ((&))
 import Control.Monad.Fix (MonadFix)
 
-borderX :: Num a => a
-borderX = 300
-borderY :: Num a => a
-borderY = 400
-border :: Num a => (a, a)
-border = (borderX, borderY)
+type Border = (Int, Int)
+initBorder :: Border
+initBorder = (300, 400)
 
 ballRadius :: Num a => a
 ballRadius = 20
-
 glossSettings :: GlossSettings
 glossSettings = defaultSettings
   { debugEvents = True
-  , displaySetting = InWindow "Essence of Live Coding Tutorial" (border ^* 2) (20, 20)
+  , displaySetting = InWindow "Essence of Live Coding Tutorial" (initBorder ^* 2) (20, 20)
   }
 
 liveProgram :: LiveProgram (HandlingStateT IO)
@@ -45,7 +42,8 @@ liveProgram = liveCell $ glossWrapC glossSettings $ glossCell
 glossCell :: Cell PictureM () ()
 glossCell = proc () -> do
   events <- constM ask -< ()
-  ball <- ballSim -< events
+  border <- watchBorder -< events
+  ball <- ballSim border -< events
   addPicture -< ballPic ball
   returnA    -< ()
 
@@ -62,17 +60,20 @@ posY = snd . pos
 velX = fst . vel
 velY = snd . vel
 
-ballSim :: (Monad m, MonadFix m) => Cell m [Event] Ball
-ballSim = proc events -> do
+ballSim :: (Monad m, MonadFix m) => Border -> Cell m [Event] Ball
+ballSim border = proc events -> do
   rec
-    let accMouse = sumV $ (^-^ pos ball) <$> clicks events
+    let
+        borderX = int2Float $ fst border
+        borderY = int2Float $ snd border
+        accMouse = sumV $ (^-^ pos ball) <$> clicks events
         accCollision = sumV $ catMaybes
           [ guard (posX ball < - borderX + ballRadius && velX ball < 0) $> (-2 * velX ball, 0)
           , guard (posX ball >   borderX - ballRadius && velX ball > 0) $> (-2 * velX ball, 0)
           , guard (posY ball < - borderY + ballRadius && velY ball < 0) $> (0, -2 * velY ball)
           , guard (posY ball >   borderY - ballRadius && velY ball > 0) $> (0, -2 * velY ball)
           ]
-    frictionVel <- integrate -< (-0.3) *^ vel ball
+    frictionVel <- integrate -< (-0.9) *^ vel ball
     impulses <- sumS -< sumV [accMouse, 0.97 *^ accCollision]
     let newVel = frictionVel ^+^ impulses
     newPos <- integrate -< newVel
@@ -85,6 +86,18 @@ clicks = catMaybes . map click
 click :: Event -> Maybe (Float, Float)
 click event@(EventKey (MouseButton LeftButton) Down _ pos) = traceShow event $ Just pos
 click event = traceShow event $ Nothing
+
+resizes :: [Event] -> [(Int, Int)]
+resizes = catMaybes . map resize
+
+resize :: Event -> Maybe (Int, Int)
+resize event@(EventResize (x, y)) = Just (x, y)
+resize _ = Nothing
+
+watchBorder :: (Monad m, MonadFix m) => Cell m [Event] Border
+watchBorder = proc events -> do
+  let b = listToMaybe . reverse $ resizes events
+  returnA -< fromMaybe initBorder b
 
 main :: IO ()
 main = runHandlingStateT $ foreground liveProgram
